@@ -1,7 +1,7 @@
 
 #!/bin/sh
 
-
+#for installation and running instructions see https://github.com/BaselAbujamous/clust
 #run paired data
 
 clust /mnt/scratch/duijt002/k-mer_clust/pw/inputdata \
