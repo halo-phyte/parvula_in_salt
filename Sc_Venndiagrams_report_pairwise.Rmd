@@ -1,0 +1,424 @@
+---
+title: "DEA_timeseries_figures"
+author: "Kilian Duijts"
+date: "12/06/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+```{r packages}
+require(reshape2)
+require(dplyr)
+require(janitor)
+require(stringr)
+require(ggVennDiagram)
+
+require(ggplot2)
+
+```
+Purpose:
+
+Creating venn diagrams to find:
+DEG expressed consistently over timepoints
+DEG expressed for specific timepoints
+```{r set parameters}
+
+date<-Sys.Date()
+
+date<-str_replace_all(string = date, pattern = "-", "")
+
+
+#path to input folder
+dq<-paste("./o_files/", date, "/", sep = "")
+
+
+#path to output folder for files
+fout<-paste("./o_files/", date, "/genelists", sep="")
+
+dir.create(fout,recursive = T)
+
+#path to output folder for plots
+pout<-paste("./o_figures/", date, "/genelists", sep="")
+dir.create(pout,recursive = T)
+
+
+
+```
+
+
+
+```{r loading data}
+
+fl<-list.files(path = dq,pattern = "rawresstable",full.names = T,recursive = T)
+
+df_03<-read.csv(file =paste(
+  "./o_files/",
+  "0mM3hrs_vs_175mM3hrs/rawresstable_0mM3hrs_vs_175mM3hrs.csv", 
+  sep=""),
+  sep = ";") %>%clean_names()
+
+colnames(df_03)[c(1,3)]<-c("geneid", "lfc")
+
+df_24<-read.csv(file =paste(
+  "./o_files/",
+  "0mM24hrs_vs_175mM24hrs/rawresstable_0mM24hrs_vs_175mM24hrs.csv", 
+  sep=""),
+  sep=";")%>%clean_names()
+
+colnames(df_24)[c(1,3)]<-c("geneid", "lfc")
+
+df_48<-read.csv(paste(
+  "./o_files/",
+  "0mM48hrs_vs_175mM48hrs/rawresstable_0mM48hrs_vs_175mM48hrs.csv", sep=""),
+  sep=";")%>%clean_names()
+
+colnames(df_48)[c(1,3)]<-c("geneid", "lfc")
+
+
+```
+
+```{r creating subsets DEG naiv}
+
+
+#create subsets
+c_03h<-df_03%>%
+  filter(padj<0.01)%>%
+  filter(lfc >1 | lfc <(-1))
+
+c_24h<-df_24%>%
+  filter(padj<0.01)%>%
+  filter(lfc >1 | lfc <(-1))
+
+c_48h<-df_48%>%
+  filter(padj<0.01)%>%
+  filter(lfc >1 | lfc <(-1))
+
+
+#create venn
+
+x= list(
+  c_03h%>%select(geneid)%>%unlist(),
+  c_24h%>%select(geneid) %>%unlist(),
+  c_48h%>%select(geneid)%>%unlist()
+)
+#plot
+
+p<-ggVennDiagram(x, label_alpha = 0, category.names = c("3h","24h","48h"), edge_size = 0.0001, edge_lty = "dashed", label_size = 6, set_size = 8)+ 
+  ggplot2::scale_fill_gradient(low='#FFFFFF',high ='#FDC830')
+
+#write plot:
+ggsave(
+  filename = paste(pout,'Venn_DEG_total.jpg', sep="/"),
+  plot = p,
+  device = NULL,
+  path = NULL,
+  scale = 1,
+  width = 150,
+  height = 150,
+  dpi = 300,
+  units = ('mm')
+)
+
+p
+
+#extract genelists
+
+#u= unique to one timepoint
+
+u03<-c_03h%>%filter(!geneid%in%c_24h$geneid & !geneid%in%c_48h$geneid)
+
+u24<-c_24h%>%filter(!geneid%in%c_03h$geneid & !geneid%in%c_48h$geneid)
+
+u48<-c_48h%>%filter(!geneid%in%c_03h$geneid & !geneid%in%c_24h$geneid)
+
+#tr= incommon in all 3
+
+tr<-c_03h%>%filter(geneid%in%c_24h$geneid & geneid%in%c_48h$geneid)
+
+#bi= bilateral sets
+
+b03_24<-c_03h%>%filter(geneid%in%c_24h$geneid & !geneid%in%tr$geneid)
+
+b03_48<-c_03h%>%filter(geneid%in%c_48h$geneid & !geneid%in%tr$geneid)
+
+b24_48<-c_24h%>%filter(geneid%in%c_48h$geneid & !geneid%in%tr$geneid)
+
+
+#write genelists
+## uniques
+write.csv(x = u03,
+          file = paste(fout, "all_u03.csv", sep="/"),
+          sep = ";")
+
+write.csv(x = u24,
+          file = paste(fout, "all_u24.csv", sep="/"),
+          sep = ";")
+
+write.csv(x = u48,
+          file = paste(fout, "all_u48.csv", sep="/"),
+          sep = ";")
+
+
+## tr
+
+write.csv(x = tr,
+          file = paste(fout, "all_tr.csv", sep="/"),
+          sep = ";")
+
+## bi
+
+write.csv(x = b03_24,
+          file = paste(fout, "all_b03_24.csv", sep="/"),
+          sep = ";")
+
+write.csv(x = b03_48,
+          file = paste(fout, "all_b03_48.csv", sep="/"),
+          sep = ";")
+
+write.csv(x = b24_48,
+          file = paste(fout, "all_b24_48.csv", sep="/"),
+          sep = ";")
+
+
+```
+
+
+The starkly different outcomes of the plots below compared to those of HL is because HL used a cutoff at lfc >0; I think this should be at 1 minimum
+```{r creating subsets DEG up}
+
+c_03h<-df_03%>%
+  filter(padj<0.01)%>%
+  filter(lfc >1 )
+
+c_24h<-df_24%>%
+  filter(padj<0.01)%>%
+  filter(lfc >1 )
+
+c_48h<-df_48%>%
+  filter(padj<0.01)%>%
+  filter(lfc >1 )
+
+
+x= list(
+  c_03h%>%select(geneid)%>%unlist(),
+  c_24h%>%select(geneid) %>%unlist(),
+  c_48h%>%select(geneid)%>%unlist()
+)
+
+
+p<-ggVennDiagram(x, label_alpha = 0, category.names = c("3h","24h","48h"), edge_size = 0.0001, edge_lty = "dashed", label_size = 6, set_size = 8)+ 
+  ggplot2::scale_fill_gradient(low='#FFFFFF',high ='#ffc3a0')
+
+#write plot:
+ggsave(
+  filename = paste(pout,'Venn_DEG_up.jpg', sep="/"),
+  plot = p,
+  device = NULL,
+  path = NULL,
+  scale = 1,
+  width = 150,
+  height = 150,
+  dpi = 300,
+  units = ('mm')
+)
+
+p
+
+
+#extract genelists
+
+#u= unique to one timepoint
+
+u03<-c_03h%>%filter(!geneid%in%c_24h$geneid & !geneid%in%c_48h$geneid)
+
+u24<-c_24h%>%filter(!geneid%in%c_03h$geneid & !geneid%in%c_48h$geneid)
+
+u48<-c_48h%>%filter(!geneid%in%c_03h$geneid & !geneid%in%c_24h$geneid)
+
+#tr= incommon in up 3
+
+tr<-c_03h%>%filter(geneid%in%c_24h$geneid & geneid%in%c_48h$geneid)
+
+#bi= bilateral sets
+
+b03_24<-c_03h%>%filter(geneid%in%c_24h$geneid & !geneid%in%tr$geneid)
+
+b03_48<-c_03h%>%filter(geneid%in%c_48h$geneid & !geneid%in%tr$geneid)
+
+b24_48<-c_24h%>%filter(geneid%in%c_48h$geneid & !geneid%in%tr$geneid)
+
+
+#write genelists
+## uniques
+write.csv(x = u03,
+          file = paste(fout, "up_u03.csv", sep="/"),
+          sep = ";")
+
+write.csv(x = u24,
+          file = paste(fout, "up_u24.csv", sep="/"),
+          sep = ";")
+
+write.csv(x = u48,
+          file = paste(fout, "up_u48.csv", sep="/"),
+          sep = ";")
+
+
+## tr
+
+write.csv(x = tr,
+          file = paste(fout, "up_tr.csv", sep="/"),
+          sep = ";")
+
+## bi
+
+write.csv(x = b03_24,
+          file = paste(fout, "up_b03_24.csv", sep="/"),
+          sep = ";")
+
+write.csv(x = b03_48,
+          file = paste(fout, "up_b03_48.csv", sep="/"),
+          sep = ";")
+
+write.csv(x = b24_48,
+          file = paste(fout, "up_b24_48.csv", sep="/"),
+          sep = ";")
+
+
+```
+
+```{r creating subsets DEG down}
+
+c_03h<-df_03%>%
+  filter(padj<0.01)%>%
+  filter(lfc <(-1) )
+
+c_24h<-df_24%>%
+  filter(padj<0.01)%>%
+  filter(lfc <(-1) )
+
+c_48h<-df_48%>%
+  filter(padj<0.01)%>%
+  filter(lfc <(-1) )
+
+
+x= list(
+  c_03h%>%select(geneid)%>%unlist(),
+  c_24h%>%select(geneid) %>%unlist(),
+  c_48h%>%select(geneid)%>%unlist()
+)
+
+
+p<-ggVennDiagram(x, label_alpha = 0, category.names = c("3h","24h","48h"), edge_size = 0.0001, edge_lty = "dashed", label_size = 6, set_size = 8)+ 
+  ggplot2::scale_fill_gradient(low='#FFFFFF',high ='#4CA1AF')
+
+#write plot:
+ggsave(
+  filename = paste(pout,'Venn_DEG_down.jpg', sep="/"),
+  plot = p,
+  device = NULL,
+  path = NULL,
+  scale = 1,
+  width = 150,
+  height = 150,
+  dpi = 300,
+  units = ('mm')
+)
+
+
+#display plot
+p
+
+#extract genelists
+
+#u= unique to one timepoint
+
+u03<-c_03h%>%filter(!geneid%in%c_24h$geneid & !geneid%in%c_48h$geneid)
+
+u24<-c_24h%>%filter(!geneid%in%c_03h$geneid & !geneid%in%c_48h$geneid)
+
+u48<-c_48h%>%filter(!geneid%in%c_03h$geneid & !geneid%in%c_24h$geneid)
+
+#tr= incommon in up 3
+
+tr<-c_03h%>%filter(geneid%in%c_24h$geneid & geneid%in%c_48h$geneid)
+
+#bi= bilateral sets
+
+b03_24<-c_03h%>%filter(geneid%in%c_24h$geneid & !geneid%in%tr$geneid)
+
+b03_48<-c_03h%>%filter(geneid%in%c_48h$geneid & !geneid%in%tr$geneid)
+
+b24_48<-c_24h%>%filter(geneid%in%c_48h$geneid & !geneid%in%tr$geneid)
+
+
+#extract genelists
+
+#u= unique to one timepoint
+
+u03<-c_03h%>%filter(!geneid%in%c_24h$geneid & !geneid%in%c_48h$geneid)
+
+u24<-c_24h%>%filter(!geneid%in%c_03h$geneid & !geneid%in%c_48h$geneid)
+
+u48<-c_48h%>%filter(!geneid%in%c_03h$geneid & !geneid%in%c_24h$geneid)
+
+#tr= incommon in down 3
+
+tr<-c_03h%>%filter(geneid%in%c_24h$geneid & geneid%in%c_48h$geneid)
+
+#bi= bilateral sets
+
+b03_24<-c_03h%>%filter(geneid%in%c_24h$geneid & !geneid%in%tr$geneid)
+
+b03_48<-c_03h%>%filter(geneid%in%c_48h$geneid & !geneid%in%tr$geneid)
+
+b24_48<-c_24h%>%filter(geneid%in%c_48h$geneid & !geneid%in%tr$geneid)
+
+
+#write genelists
+## uniques
+write.csv(x = u03,
+          file = paste(fout, "down_u03.csv", sep="/"),
+          sep = ";")
+
+write.csv(x = u24,
+          file = paste(fout, "down_u24.csv", sep="/"),
+          sep = ";")
+
+write.csv(x = u48,
+          file = paste(fout, "down_u48.csv", sep="/"),
+          sep = ";")
+
+
+## tr
+
+write.csv(x = tr,
+          file = paste(fout, "down_tr.csv", sep="/"),
+          sep = ";")
+
+## bi
+
+write.csv(x = b03_24,
+          file = paste(fout, "down_b03_24.csv", sep="/"),
+          sep = ";")
+
+write.csv(x = b03_48,
+          file = paste(fout, "down_b03_48.csv", sep="/"),
+          sep = ";")
+
+write.csv(x = b24_48,
+          file = paste(fout, "down_b24_48.csv", sep="/"),
+          sep = ";")
+
+```
+
+```{r session}
+
+
+
+utils::sessionInfo()
+
+
+```

@@ -1,0 +1,280 @@
+---
+title: "Re-plotting k-means"
+author: "Kilian Duijts"
+date: "3/8/2022"
+output: html_document
+---
+
+#sort out paths
+
+
+```{r loading packages}
+
+require(stringr)
+require(ggplot2)
+require(dplyr)
+
+```
+
+
+
+```{r set parameter}
+date<-Sys.Date()
+
+date<-str_replace_all(string = date, pattern = "-", "")
+
+
+#path to input folder
+ip<-"./inputs/"
+
+dir.create(ip, recursive = T)
+
+#path to output folder for files
+fout<-paste("./o_files/", date, sep="")
+
+dir.create(fout,recursive = T)
+
+#path to output folder for plots
+pout<-paste("./o_figures/", date, sep="")  
+dir.create(pout,recursive = T)
+
+```
+# Loading inputdata
+
+In the following chunks we will load the input data 
+
+#load & pre-order data
+```{r loading  data}
+require(reshape2)
+
+#load sp data
+cl<-read.delim(file = "./inputs/Clusters_OGs.txt")
+
+sp<-read.delim(file = "./inputs/fpkm.tsv_processed.tsv", na.strings = c("", "NA"))
+
+sp<-left_join(sp, cl[,c("OGs", "cluster")])
+
+sp<-melt(sp, id=c("OGs", "cluster", "agi", "spgeneid"))
+
+#calculate averages
+
+
+#create data type vatiable
+sp$type<-c("datapoint")
+
+#calculate average values by cluster
+avsp<-sp%>%group_by(cluster, variable)%>%summarise_at(vars(value), list(name=mean))
+colnames(avsp)<-c("cluster", "variable", "value")
+
+#set average data type
+avsp$type<-c("average")
+avsp$OGs<-NA
+avsp$agi<-NA
+avsp$spgeneid<-NA
+
+
+#bind to at
+sp<-rbind(sp, avsp)
+
+
+
+#create mock 0hrs point for At
+mocktime<-data.frame("OGs"=NA, 
+                     "cluster"=c("C0", "C1", "C2", "C2", "C3", "C4", "C5", "C6", "C7", "C8"), 
+                     "agi"=NA,
+                     "spgeneid"=NA,
+                     "variable"="0hrs",
+                     "value"=NA
+)
+                     
+#load at data
+at<-read.delim(file = "./inputs/geng_preprocessed.tsv_processed.tsv", na.strings = c("", "NA"))
+
+#join with expression data
+at<-left_join(at, cl[,c("OGs", "cluster")])
+
+
+#to long format for ggplot
+at<-melt(at, id=c("OGs", "cluster", "agi", "spgeneid"))
+
+#add mock timepoint
+at<-rbind(at, mocktime)
+
+
+#create data type vatiable
+at$type<-c("datapoint")
+
+#calculate average values by cluster
+avat<-at%>%group_by(cluster, variable)%>%summarise_at(vars(value), list(name=mean))
+colnames(avat)<-c("cluster", "variable", "value")
+
+#set average data type
+avat$type<-c("average")
+avat$OGs<-NA
+avat$agi<-NA
+avat$spgeneid<-NA
+
+
+#bind to at
+at<-rbind(at, avat)
+
+
+#sort out factorization for label order in ggplot
+
+##At
+at$variable<-as.character(at$variable)
+at$variable<-factor(at$variable, levels=c("0hrs","ms_3hr", "ms_20hr","ms_2day",
+                                     "na_cl_3hr","na_cl_20hr", "na_cl_2day"
+                                )
+                              
+                       )
+
+#Sp
+sp$variable<-as.character(sp$variable)
+sp$variable<-factor(sp$variable, levels=c("X0mM0hrs","X0mM3hrs", "X0mM24hrs","X0mM48hrs",
+                                     "X175mM3hrs","X175mM24hrs", "X175mM48hrs"
+                                )
+                              
+                       )
+
+
+
+```
+
+
+
+
+
+#function to plot expression values
+
+
+```{r plot function}
+library(patchwork)
+require(ggtext)
+clplot<-function(cl, # string, name of cluster ("C0", C1" etc)
+                 at, #at dataset ready to plot
+                 sp  #sp dataset ready to plot
+                 
+                 ){
+  
+  
+  sp1<-ggplot(data = sp%>%filter(cluster==cl), aes(x=variable, 
+                                                   y=value, 
+                                                   group=OGs, 
+                                                   colour=type))+
+  geom_line()+
+  scale_x_discrete(
+    #breaks=c(1:7),
+                    labels=c("0hrs", "3hrs control","24hrs control","48hrs control",
+                             "3hrs NaCl",
+                             "24hrs NaCl",
+                             "48hrs NaCl")
+                   )+
+  labs(x="", y=paste("expression  *S. parvula*", sep=""),
+       title = paste("Cluster ", cl, sep=""))+
+  
+    scale_color_manual(values = c("red", "grey"))+
+   guides(colour="none")+
+  
+  theme_bw()+
+  theme(axis.title.y = ggtext::element_markdown())+
+    
+    theme(axis.text=element_text(size=11),
+        axis.title=element_text(size=12,face="italic"))+
+   theme(axis.text.x = element_text(angle = 45, vjust = .6, hjust=.5))
+  
+  
+  
+  
+at1<-  
+  ggplot(data = at%>%filter(cluster==cl), aes(x=variable, 
+                                                y=value, 
+                                                group=OGs, 
+                                                colour=type))+
+  geom_line()+
+  scale_x_discrete(
+    #breaks=c(1:7),
+                    labels=c("0hrs", "3hrs control","20hrs control","2 days control",
+                             "3hrs NaCl",
+                             "20hrs NaCl",
+                             "2 days NaCl")
+                   )+
+  labs(x="timepoints",
+       y=paste("expression  *Arabidopsis*", sep="")
+       )+
+  
+  scale_color_manual(values = c("red", "grey"))+
+  
+  guides(colour="none")+
+  
+  theme_bw()+
+  
+  theme(axis.title.y = ggtext::element_markdown())+
+  
+  theme(axis.text=element_text(size=11),
+        axis.title=element_text(size=12,face="italic"))+
+   theme(axis.text.x = element_text(angle = 45, vjust = .6, hjust=.5))
+
+
+
+
+
+
+stack<-sp1 / at1
+
+
+return(stack)
+}
+```
+##Step in parvula for missing 0hrs
+##Add k-mean line?
+##add color based on presence or absence of at/sp
+
+#wrap plots in stacks
+
+#repeat for all clusters
+```{r for loop clusters}
+
+
+kname<-unique(at$cluster)%>%na.omit()
+
+for (i in kname) {
+  
+  p1<-clplot(cl=i, at=at, sp=sp)
+  
+  
+  ggsave(filename = paste(i, "_angle_plot.png", sep=""),
+         plot = p1,
+         device ="png",
+         path = pout,
+         dpi = 600, height = 1.5*3000,width = 4200,units = "px")
+  
+  ggsave(filename = paste(i, "_angle_plot.EPS", sep=""),plot = p1,device ="eps",
+         path = pout,
+         dpi = 600, height = 1.5*3000,width = 4200,units = "px")
+  
+  p1
+}
+
+```
+
+```{r test}
+
+   p1<-clplot(cl=i, at=at, sp=sp)
+ p1
+
+# 
+ p2<-p1+
+    theme(axis.text.x = element_text(angle = 45, vjust = .6, hjust=.5, debug = T))
+ p2
+
+
+```
+
+
+```{r session info}
+sessionInfo()
+
+```
+
+

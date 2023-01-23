@@ -1,0 +1,444 @@
+---
+title: "Sc_parvula_DESeq_report"
+author: "Kilian Duijts"
+date: "10/23/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE, }
+knitr::opts_chunk$set(echo = TRUE, message = FALSE)
+```
+# Introduction
+
+In this file I am re-running the DESeq2 analysis of S. parvula as done by HL. The script has been addapted to generate this RMarkdown report and is intented to make it easier to reproduce the analysis. To make it easier to keep track of the script snippets of the objects used will be printed in this report.
+It is assumed that this script is run from a folder that contains a subfolder called "input".
+
+
+# Loading packages
+
+```{r load packages, message=FALSE,warning=FALSE}
+
+
+require(data.table)
+
+require(DESeq2)
+
+require(ggplot2)
+
+require(pheatmap) #heatmap
+
+require(RColorBrewer) #heatmap
+
+require(rtracklayer) #import gff
+
+require(stringr)
+
+require(SummarizedExperiment)
+
+require(tibble)
+
+require(tidyverse)
+
+require(tximport)
+
+```
+
+
+To prevent overwriting of previous results when reproducing the outputs of this script files are stored in separate folders by date.
+
+# Setting parameters
+```{r set parameter}
+date<-Sys.Date()
+
+date<-str_replace_all(string = date, pattern = "-", "")
+
+
+#path to input folder
+ip<-"./inputs/"
+
+
+#path to output folder for files
+fout<-paste("./o_files/", date, sep="")
+
+dir.create(fout,recursive = T)
+
+#path to output folder for plots
+pout<-paste("./o_figures/", date, sep="")  
+dir.create(pout,recursive = T)
+
+```
+# Loading inputdata
+
+In the following chunks we will load the input data 
+```{r loading setup data}
+
+setup<- read.table(file = paste(ip, "RNAseq2.csv", sep=""), 
+                      header=TRUE, 
+                      sep= ",")
+#since we do pairwise comparisons we need a variable combining the Treantment and timepoint. This treatment we call tandt
+
+setup$tandt<-paste(setup$Treatment, setup$Timepoint,sep = "")
+
+
+#head(setup)
+
+```
+
+# Summing splice variants or not?
+
+To sum all splice variants and obtain expression data on gene level we need to provide a lookup table (tx2gene) for the importing function down the line. Here we create this lookup table.
+```{r loading genome data}
+
+gff = import(paste( ip, "Sparvula_574_v2.2.gene.gff3", sep=""))
+
+tx2gene <- tibble(txid = gff$Name, geneid = as.character(gff$Parent))# ) %>% na.omit()
+tx2gene <- na.omit(tx2gene)
+
+
+#test how many splice variants have been identified
+tx2gene_test<-tx2gene
+
+#extract only the splice variant number of each transcript
+tx2gene_test$splice<-str_extract(tx2gene_test$txid,pattern = "\\.[:digit:]{1}")
+
+
+
+unique(tx2gene_test$splice)
+```
+The chunk above shows that using the data extracted from the gff gile no splice variants are registered. This means that the step in tximport where splice variants are summed can be skipped.
+This means we nolonger need tx2gene. If we do use it we mis out on some transcripts:
+
+
+
+## What if we do?
+If we do use it we mis out on 1916 transcripts:
+
+```{r load sample data _retired_}
+#addapt gene names in tx2gene
+tx2gene$txid<-str_replace_all(string = tx2gene$txid,
+                              pattern = "Sp", 
+                              replacement = "Tp") %>%
+  str_replace(pattern = "\\.[:digit:]{1}",
+              replacement = "")
+
+
+#replace species abreviation
+tx2gene$geneid<-str_replace_all(string = tx2gene$geneid,pattern = "Sp", "Tp")
+
+
+
+# setwd(paste(ip,"RNAseq_sample_export", sep=""))
+# 
+# #import data using tx2gene
+# txi_lu <- tximport(files = setup$filename, type = "salmon", tx2gene = tx2gene)
+# 
+# 
+# #import data without extra step
+# txi_test<-tximport(files = setup$filename, type = "salmon", txOut = T)
+# 
+# #obtaining geneid lists of both
+# 
+# txi_gl<-txi_lu[1] %>%as.data.frame()
+# txi_t<-txi_test[1]%>%as.data.frame()
+# 
+# # simplifying rownames
+# 
+# rn_txi<-str_replace(string = rownames(txi_gl),
+#                     pattern = "\\.v[:digit:]{1}\\.[:digit:]{1}",
+#                     replacement = "")
+# rownames(txi_gl)<-rn_txi
+# 
+# #comparing the two outputs
+# 
+# #genes in txi_gl and not in txi_test
+# a<-txi_gl%>%filter(!rownames(txi_gl)%in%rownames(txi_t))
+# 
+# #head(a)
+# 
+# #genes in txi_test and not in txi gl
+# b<-txi_t%>%filter(!rownames(txi_t)%in%rownames(txi_gl))
+# 
+# 
+# #head(b)
+
+```
+
+To recap: extracting results using the tx2gene option results in 24810 unique genes, and when importing the data without the lookup table we obtain 26726 genes. In the latter case we obtain 1916 more genes. In the following step I will proceed importing the data without the lookup table.
+
+# Continuing without splice variant summing
+
+```{r load sample data}
+setwd("./inputs/RNAseq_sample_export")
+
+txi<-tximport(files = setup$filename, type = "salmon", txOut = T)
+
+setup$tandt<-as.factor(setup$tandt)
+
+ddsTxi <- DESeqDataSetFromTximport(txi, setup, design = ~tandt)
+
+
+
+ddsTxi
+
+```
+
+
+```{r writing countstable}
+#for go-enrichment we need a list of all detected genes. We are writing file now for later
+
+gc<-txi[2]%>%as.data.frame()
+colnames(gc)<-setup$ï..Seq_Well
+gc$geneid<-rownames(gc)
+write_delim(gc,file = paste(fout, "parvula_gc.csv", sep="/"), delim = ";")
+
+
+```
+While not strictly necissary we will filter out the extremely lowly expressed genes from the dataset. This will increase the speed of the analysis and reduce memory requirements.
+
+## Filtering
+
+```{r Pre-filtering}
+keep <- rowSums(counts(ddsTxi)) >10
+
+
+
+ddsTxi <- ddsTxi[keep,]
+
+ddsTxi
+
+```
+
+
+# Running DESeq2
+## Dispersion Estimates
+
+The DESeq2 vignette advisis against subsetting data for pairwise comparisons unless one of the treatment groups has very large variation. Instead it is recommended to set contrasts in the results function. For this reason we will procede here with the whole dataset. In the PCA plot we will be able to check if this assumption is true.
+
+```{r running DESeq2}
+
+dds<-DESeq(ddsTxi)
+
+
+p<-plotDispEsts(dds)
+
+
+jpeg(filename = paste(pout,"_Dispersion.jpeg", sep="/"),quality=100,width = 500, height = 500, pointsize=10)
+
+plotDispEsts(dds)
+
+dev.off()
+
+p
+
+```
+# Diagnostic plots
+In this following section we will generate a series of diagnostic plots
+
+The sample2sample distance plot will help verify there are no unexpected outlying samples. For visualisation the values need to be normalised; for this various algorithms are available. HL used vsd, so I am sticking with it.
+
+
+## Sample2sample distance
+
+```{r diagnostic plots: sample2sample distance}
+
+#Heatmap of the sample-to-sample distances 
+
+vsd <- vst(dds, blind=FALSE)
+rld <- rlog(dds, blind=FALSE)
+ntd <- normTransform(dds)
+
+
+sampleDists <- dist(t(assay(vsd)))
+sampleDistMatrix <- as.matrix(sampleDists)
+rownames(sampleDistMatrix) <- paste(vsd$Treatment, vsd$Timepoint, sep="-")
+colnames(sampleDistMatrix) <- paste(vsd$Treatment, vsd$Timepoint, sep="-")
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+
+p<-pheatmap(sampleDistMatrix,
+         clustering_distance_rows=sampleDists,
+         clustering_distance_cols=sampleDists,
+         col=colors)
+jpeg(filename = paste(pout, "vsd_sampletosampledis.jpg", sep="/"),
+     quality=100,
+     width=600,
+     height=600)
+
+p
+
+dev.off()
+
+p
+
+```
+## PCA-plot
+
+```{r diagnostic plots: PCA-plot}
+
+
+pcaData <- plotPCA(vsd, intgroup=c("Treatment", "Timepoint"), returnData=TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+p<-ggplot(pcaData, aes(PC1, PC2, color=Treatment, shape=Timepoint)) +
+  geom_point(size=3) +
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) + 
+  coord_fixed()+theme_bw()
+ggsave(
+  filename = paste(pout, "PCA.jpg", sep="/"),
+  plot = p,
+  device = NULL,
+  path = NULL,
+  scale = 1,
+  width = 150,
+  height = 150,
+  dpi = 300,
+  units = "mm"
+)
+
+p
+```
+From the plots above we see that the samples have littly variation within them; so we proceed with the whole dataset.
+
+
+To automate the extraction of pairwise results we will make use of a for loop. For this we need to specify the different contrasts we want to use like so:
+
+```{r obtain fpkm}
+
+fpkm<-fpkm(object = dds, robust = T)%>%as.data.frame()
+
+colnames(fpkm)<-paste(setup$ï..Seq_Well, setup$tandt, seo="_")
+fpkm$spgeneid<-str_replace(string = rownames(fpkm),pattern = "Tp",replacement = "Sp")
+
+write_delim(x = fpkm,file = paste(fout, "/fpkm.csv", sep = ""),delim = ";")
+
+```
+
+```{r preparing result extraction}
+#setting contrasts and references
+rf<-data.frame( "ref"=c("0mM3hrs", "0mM24hrs", "0mM48hrs"),
+                "trt"=c("175mM3hrs", "175mM24hrs", "175mM48hrs")
+)
+
+#setting p-value cut-off
+p_thres<-0.01
+
+
+
+```
+
+# Extracting and writing out results
+In HL script results are extracted using 
+summary(results(dds_run, name= "resultsName[1]", alpha=0.01)); this automatically sets CooksCutoff and independent filtering to TRUE; so I will do that here too.
+
+```{r extracting results}
+require(ashr)
+
+for (i in seq(1:length(rf$trt)
+              )
+     ) {
+  
+  #generate name for comparion
+  contrast<-paste(rf$ref[i], "_vs_",rf$trt[i],
+                  sep="")
+  
+  
+  #create output dir
+  resdir<-paste(fout, contrast, 
+                sep="/")
+  
+  dir.create(path = resdir, recursive = T)
+  
+  
+  
+  
+  #create results df
+  res<- results(dds, 
+                contrast=c("tandt", 
+                           paste0(rf$trt[i]), 
+                           paste0(rf$ref[i])),
+                alpha = p_thres, 
+                tidy = TRUE,
+                cooksCutoff=TRUE, 
+                independentFiltering=TRUE)
+  
+  #get summarized results
+  sumres<-  summary(res)
+  resSig <- subset(res, padj < p_thres)
+  
+  
+  #write results
+  ##write raw results
+  write_delim(x = res,
+              file = paste(resdir, 
+                           paste("rawresstable_", contrast, ".csv", sep=""),
+                           sep="/"),
+              delim = ";")
+  
+  
+  ##write summarized results
+  write.csv(x = sumres,
+              file= paste(resdir,
+                          paste("summarised_res_", contrast, ".csv", sep=""),
+                          sep="/")
+  )
+  
+  
+  #write significant results
+  write_delim(x=resSig, 
+              file=paste(resdir,
+                         paste("significant_res_", contrast, ".csv", sep=""),
+                         sep="/"),
+              delim = ";")
+  
+
+
+
+  #obtain shrunken values to use for visualisation
+  resLFC<-lfcShrink(dds,
+                    contrast =  c("tandt", rf$trt[i], rf$ref[i]),
+                    type="ashr")
+  
+  write_delim(x=resSig, 
+              file=paste(resdir,
+                         paste("shrunk_res_", contrast, ".csv", sep=""),
+                         sep="/"),
+              delim = ";")  
+  #Generate MA plot
+
+  
+  #write MA plot
+  png(filename = paste(pout,"/", contrast,  "_MA-plot.png", sep=""))
+  plotMA(object = resLFC, 
+         main=paste("MA-plot for ", rf$trt[i], sep=""),
+         ylim=c(-10,10))
+
+  dev.off()
+  
+  
+  #write p value hist
+  
+  png(filename =paste(pout,"/", contrast,  "pvalHist.png", sep=""))
+  hist(x = res$padj[res$baseMean>1], 
+       main=paste("MA-plot for ", rf$trt[i], sep=""),
+       breaks = 20, col="gray50",border="white")
+  
+  
+  dev.off()
+
+  
+  
+}
+
+
+
+
+
+```
+
+
+# Session info
+```{r sessioninfo}
+
+
+utils::sessionInfo(
+  
+)
